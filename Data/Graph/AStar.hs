@@ -1,31 +1,32 @@
 module Data.Graph.AStar (aStar,aStarM) where
 
-import qualified Data.Set as Set
-import Data.Set (Set, (\\))
-import qualified Data.Map as Map
-import Data.Map (Map, (!))
-import qualified Data.PSQueue as PSQ
-import Data.PSQueue (PSQ, Binding(..), minView)
+import qualified Data.HashSet as Set
+import Data.HashSet (HashSet)
+import Data.Hashable (Hashable(..))
+import qualified Data.HashMap.Strict as Map
+import Data.HashMap.Strict (HashMap, (!))
+import qualified Data.OrdPSQ as PSQ
+import Data.OrdPSQ (OrdPSQ, minView)
 import Data.List (foldl')
 import Control.Monad (foldM)
 
-data AStar a c = AStar { visited  :: !(Set a),
-                         waiting  :: !(PSQ a c),
-                         score    :: !(Map a c),
-                         memoHeur :: !(Map a c),
-                         cameFrom :: !(Map a a),
+data AStar a c = AStar { visited  :: !(HashSet a),
+                         waiting  :: !(OrdPSQ a c ()),
+                         score    :: !(HashMap a c),
+                         memoHeur :: !(HashMap a c),
+                         cameFrom :: !(HashMap a a),
                          end      :: !(Maybe a) }
     deriving Show
-    
+
 aStarInit start = AStar { visited  = Set.empty,
-                          waiting  = PSQ.singleton start 0,
+                          waiting  = PSQ.singleton start 0 (),
                           score    = Map.singleton start 0,
                           memoHeur = Map.empty,
                           cameFrom = Map.empty,
                           end      = Nothing }
 
-runAStar :: (Ord a, Ord c, Num c) =>
-         (a -> Set a)     -- adjacencies in graph
+runAStar :: (Hashable a, Ord a, Ord c, Num c)
+         => (a -> HashSet a)     -- adjacencies in graph
          -> (a -> a -> c) -- distance function
          -> (a -> c)      -- heuristic distance to goal
          -> (a -> Bool)   -- goal
@@ -36,13 +37,13 @@ runAStar graph dist heur goal start = aStar' (aStarInit start)
   where aStar' s
           = case minView (waiting s) of
               Nothing            -> s
-              Just (x :-> _, w') ->
+              Just (x, _,  _, w') ->
                 if goal x
                   then s { end = Just x }
                   else aStar' $ foldl' (expand x)
                                        (s { waiting = w',
                                             visited = Set.insert x (visited s)})
-                                       (Set.toList (graph x \\ visited s))
+                                       (Set.toList (graph x `Set.difference` visited s))
         expand x s y
           = let v = score s ! x + dist x y
             in case PSQ.lookup y (waiting s) of
@@ -55,12 +56,12 @@ runAStar graph dist heur goal start = aStar' (aStarInit start)
         link x y v s
            = s { cameFrom = Map.insert y x (cameFrom s),
                  score    = Map.insert y v (score s),
-                 waiting  = PSQ.insert y (v + memoHeur s ! y) (waiting s) }
+                 waiting  = PSQ.insert y (v + memoHeur s ! y) () (waiting s) }
 
 -- | This function computes an optimal (minimal distance) path through a graph in a best-first fashion,
 -- starting from a given starting point.
-aStar :: (Ord a, Ord c, Num c) =>
-         (a -> Set a)     -- ^ The graph we are searching through, given as a function from vertices
+aStar :: (Hashable a, Ord a, Ord c, Num c) =>
+         (a -> HashSet a)     -- ^ The graph we are searching through, given as a function from vertices
                           -- to their neighbours.
          -> (a -> a -> c) -- ^ Distance function between neighbouring vertices of the graph. This will
                           -- never be applied to vertices that are not neighbours, so may be undefined
@@ -76,8 +77,8 @@ aStar graph dist heur goal start
             Nothing -> Nothing
             Just e  -> Just (reverse . takeWhile (not . (== start)) . iterate (cameFrom s !) $ e)
 
-runAStarM :: (Monad m, Ord a, Ord c, Num c) =>
-          (a -> m (Set a))   -- adjacencies in graph
+runAStarM :: (Monad m, Hashable a, Ord a, Ord c, Num c) =>
+          (a -> m (HashSet a))   -- adjacencies in graph
           -> (a -> a -> m c) -- distance function
           -> (a -> m c)      -- heuristic distance to goal
           -> (a -> m Bool)   -- goal
@@ -88,14 +89,14 @@ runAStarM graph dist heur goal start = aStar' (aStarInit start)
   where aStar' s
           = case minView (waiting s) of
               Nothing            -> return s
-              Just (x :-> _, w') ->
+              Just (x, _,  _, w') ->
                 do g <- goal x
                    if g then return (s { end = Just x })
                         else do ns <- graph x
                                 u <- foldM (expand x)
                                            (s { waiting = w',
                                                 visited = Set.insert x (visited s)})
-                                           (Set.toList (ns \\ visited s))
+                                           (Set.toList (ns `Set.difference` visited s))
                                 aStar' u
         expand x s y
           = do d <- dist x y
@@ -109,12 +110,12 @@ runAStarM graph dist heur goal start = aStar' (aStarInit start)
         link x y v s
            = s { cameFrom = Map.insert y x (cameFrom s),
                  score    = Map.insert y v (score s),
-                 waiting  = PSQ.insert y (v + memoHeur s ! y) (waiting s) }
+                 waiting  = PSQ.insert y (v + memoHeur s ! y) () (waiting s) }
 
 -- | This function computes an optimal (minimal distance) path through a graph in a best-first fashion,
 -- starting from a given starting point.
-aStarM :: (Monad m, Ord a, Ord c, Num c) =>
-         (a -> m (Set a))   -- ^ The graph we are searching through, given as a function from vertices
+aStarM :: (Monad m, Hashable a, Ord a, Ord c, Num c) =>
+         (a -> m (HashSet a))   -- ^ The graph we are searching through, given as a function from vertices
                             -- to their neighbours.
          -> (a -> a -> m c) -- ^ Distance function between neighbouring vertices of the graph. This will
                             -- never be applied to vertices that are not neighbours, so may be undefined
@@ -134,10 +135,10 @@ aStarM graph dist heur goal start
 
 
 
-plane :: (Integer, Integer) -> Set (Integer, Integer)
+plane :: (Integer, Integer) -> HashSet (Integer, Integer)
 plane (x,y) = Set.fromList [(x-1,y),(x+1,y),(x,y-1),(x,y+1)]
 
-planeHole :: (Integer, Integer) -> Set (Integer, Integer)
+planeHole :: (Integer, Integer) -> HashSet (Integer, Integer)
 planeHole (x,y) = Set.filter (\(u,v) -> planeDist (u,v) (0,0) > 10) (plane (x,y))
 
 planeDist :: (Integer, Integer) -> (Integer, Integer) -> Double
